@@ -18,7 +18,6 @@ import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.widget.TextView
 import org.json.JSONArray
 import java.io.BufferedReader
@@ -42,8 +41,8 @@ class OverlayService : Service() {
     }
 
     private lateinit var windowManager: WindowManager
-    private lateinit var rootContainer: FrameLayout
     private lateinit var subtitleView: TextView
+    private val itemViews = mutableListOf<View>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var serverSocket: ServerSocket? = null
     private val hideRunnable = Runnable { clearAll() }
@@ -83,16 +82,31 @@ class OverlayService : Service() {
         startForeground(101, notification)
     }
 
+    private fun overlayType(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+    }
+
+    private fun baseFlags(): Int {
+        return WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+    }
+
     private fun setupOverlayView() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealMetrics(metrics)
-        screenW = metrics.widthPixels
-        screenH = metrics.heightPixels
-
-        rootContainer = FrameLayout(this)
+        if (metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+            screenW = metrics.widthPixels
+            screenH = metrics.heightPixels
+        }
 
         subtitleView = createLabelView(20f).apply {
             maxWidth = (screenW * 0.78).toInt()
@@ -101,33 +115,18 @@ class OverlayService : Service() {
             visibility = View.GONE
         }
 
-        val subParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
+        val subParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            baseFlags(),
+            PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            bottomMargin = (screenH * 0.05).toInt()
-        }
-        rootContainer.addView(subtitleView, subParams)
-
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
+            y = 56
         }
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        )
-
-        windowManager.addView(rootContainer, params)
+        windowManager.addView(subtitleView, subParams)
     }
 
     private fun createLabelView(sizeSp: Float): TextView {
@@ -149,9 +148,10 @@ class OverlayService : Service() {
 
     private fun clearAll() {
         subtitleView.visibility = View.GONE
-        while (rootContainer.childCount > 1) {
-            rootContainer.removeViewAt(rootContainer.childCount - 1)
+        for (v in itemViews) {
+            try { windowManager.removeView(v) } catch (_: Exception) {}
         }
+        itemViews.clear()
     }
 
     private fun showSingleSubtitle(raw: String) {
@@ -186,17 +186,22 @@ class OverlayService : Service() {
                         maxLines = 2
                         ellipsize = TextUtils.TruncateAt.END
                     }
-                    val lp = FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.WRAP_CONTENT,
-                        FrameLayout.LayoutParams.WRAP_CONTENT
+
+                    val lp = WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        overlayType(),
+                        baseFlags(),
+                        PixelFormat.TRANSLUCENT
                     ).apply {
-                        gravity = Gravity.TOP or Gravity.START
-                        leftMargin = (nx * screenW).toInt()
-                        topMargin = ((ny - 0.042).coerceAtLeast(0.01) * screenH).toInt()
+                        gravity = Gravity.TOP or Gravity.LEFT
+                        x = (nx * screenW).toInt()
+                        y = ((ny - 0.042).coerceAtLeast(0.01) * screenH).toInt()
                     }
-                    rootContainer.addView(label, lp)
+                    windowManager.addView(label, lp)
+                    itemViews.add(label)
                 }
-                if (arr.length() > 0) {
+                if (itemViews.isNotEmpty()) {
                     mainHandler.postDelayed(hideRunnable, 8000)
                 }
             } catch (_: Exception) {
@@ -267,7 +272,10 @@ class OverlayService : Service() {
         isRunning = false
         instance = null
         try { serverSocket?.close() } catch (_: Exception) {}
-        try { windowManager.removeView(rootContainer) } catch (_: Exception) {}
+        mainHandler.post {
+            clearAll()
+            try { windowManager.removeView(subtitleView) } catch (_: Exception) {}
+        }
         super.onDestroy()
     }
 
