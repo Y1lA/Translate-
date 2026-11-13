@@ -48,6 +48,8 @@ class OverlayService : Service() {
     private val hideRunnable = Runnable { clearAll() }
     private var screenW = 1920
     private var screenH = 1080
+    private var lastItemsJson: String = ""
+    private var lastSingleText: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -147,6 +149,8 @@ class OverlayService : Service() {
     }
 
     private fun clearAll() {
+        lastItemsJson = ""
+        lastSingleText = ""
         subtitleView.visibility = View.GONE
         for (v in itemViews) {
             try { windowManager.removeView(v) } catch (_: Exception) {}
@@ -158,18 +162,29 @@ class OverlayService : Service() {
         val clean = raw.trim()
         mainHandler.post {
             mainHandler.removeCallbacks(hideRunnable)
-            clearAll()
-            if (clean.isNotEmpty()) {
-                subtitleView.text = clean
-                subtitleView.visibility = View.VISIBLE
-                mainHandler.postDelayed(hideRunnable, 7000)
+            if (clean.isEmpty()) {
+                clearAll()
+                return@post
             }
+            if (clean == lastSingleText && subtitleView.visibility == View.VISIBLE) {
+                mainHandler.postDelayed(hideRunnable, 8000)
+                return@post
+            }
+            clearAll()
+            lastSingleText = clean
+            subtitleView.text = clean
+            subtitleView.visibility = View.VISIBLE
+            mainHandler.postDelayed(hideRunnable, 8000)
         }
     }
 
     private fun showPositionedItems(jsonStr: String) {
         mainHandler.post {
             mainHandler.removeCallbacks(hideRunnable)
+            if (jsonStr == lastItemsJson && itemViews.isNotEmpty()) {
+                mainHandler.postDelayed(hideRunnable, 8000)
+                return@post
+            }
             clearAll()
             try {
                 val arr = JSONArray(jsonStr)
@@ -202,6 +217,7 @@ class OverlayService : Service() {
                     itemViews.add(label)
                 }
                 if (itemViews.isNotEmpty()) {
+                    lastItemsJson = jsonStr
                     mainHandler.postDelayed(hideRunnable, 8000)
                 }
             } catch (_: Exception) {
