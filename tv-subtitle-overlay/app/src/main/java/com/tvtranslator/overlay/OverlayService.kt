@@ -20,6 +20,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.TextView
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.ServerSocket
@@ -33,6 +34,12 @@ class OverlayService : Service() {
         var isRunning = false
         @Volatile
         var currentMode = "menus"
+        @Volatile
+        var savedKey = ""
+        @Volatile
+        var savedModel = "gemma-4-26b-a4b-it"
+        @Volatile
+        var savedGame = "GTA 6"
         private var instance: OverlayService? = null
 
         fun updateSubtitle(text: String) {
@@ -110,10 +117,24 @@ class OverlayService : Service() {
             screenH = metrics.heightPixels
         }
 
-        subtitleView = createLabelView(20f).apply {
-            maxWidth = (screenW * 0.78).toInt()
+        val subBg = GradientDrawable().apply {
+            setColor(Color.parseColor("#B80A0C10"))
+            cornerRadius = 16f
+        }
+        subtitleView = TextView(this).apply {
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#F8FAFC"))
+            setShadowLayer(5f, 0f, 2f, Color.BLACK)
+            gravity = Gravity.CENTER
+            textDirection = View.TEXT_DIRECTION_RTL
+            background = subBg
+            setPadding(30, 12, 30, 12)
+            setLineSpacing(6f, 1.0f)
+            maxWidth = (screenW * 0.76).toInt()
             maxLines = 3
             ellipsize = TextUtils.TruncateAt.END
+            alpha = 0f
             visibility = View.GONE
         }
 
@@ -125,83 +146,103 @@ class OverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = 56
+            y = (screenH * 0.055).toInt()
         }
 
         windowManager.addView(subtitleView, subParams)
     }
 
-    private fun createLabelView(sizeSp: Float): TextView {
+    private fun createMenuPill(text: String): TextView {
         val bg = GradientDrawable().apply {
-            setColor(Color.parseColor("#D9111318"))
-            cornerRadius = 18f
-            setStroke(2, Color.parseColor("#44FFFFFF"))
+            setColor(Color.parseColor("#CC0E1117"))
+            cornerRadius = 12f
+            setStroke(1, Color.parseColor("#38FFFFFF"))
         }
         return TextView(this).apply {
-            textSize = sizeSp
+            this.text = text
+            textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.WHITE)
+            setTextColor(Color.parseColor("#F1F5F9"))
+            setShadowLayer(3f, 0f, 1f, Color.BLACK)
             gravity = Gravity.CENTER
             textDirection = View.TEXT_DIRECTION_RTL
             background = bg
-            setPadding(22, 8, 22, 8)
+            setPadding(16, 6, 16, 6)
+            maxWidth = (screenW * 0.28).toInt()
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
         }
     }
 
     private fun clearAll() {
         lastItemsJson = ""
         lastSingleText = ""
+        subtitleView.animate().cancel()
         subtitleView.visibility = View.GONE
+        subtitleView.alpha = 0f
         for (v in itemViews) {
             try { windowManager.removeView(v) } catch (_: Exception) {}
         }
         itemViews.clear()
     }
 
+    private fun resetHideTimer() {
+        mainHandler.removeCallbacks(hideRunnable)
+        mainHandler.postDelayed(hideRunnable, 9000)
+    }
+
     private fun showSingleSubtitle(raw: String) {
         val clean = raw.trim()
         mainHandler.post {
-            mainHandler.removeCallbacks(hideRunnable)
             if (clean.isEmpty()) {
                 clearAll()
                 return@post
             }
             if (clean == lastSingleText && subtitleView.visibility == View.VISIBLE) {
-                mainHandler.postDelayed(hideRunnable, 8000)
+                resetHideTimer()
                 return@post
             }
             clearAll()
             lastSingleText = clean
             subtitleView.text = clean
+            subtitleView.alpha = 0f
             subtitleView.visibility = View.VISIBLE
-            mainHandler.postDelayed(hideRunnable, 8000)
+            subtitleView.animate().alpha(1f).setDuration(150).start()
+            resetHideTimer()
         }
     }
 
     private fun showPositionedItems(jsonStr: String) {
         mainHandler.post {
-            mainHandler.removeCallbacks(hideRunnable)
             if (jsonStr == lastItemsJson && itemViews.isNotEmpty()) {
-                mainHandler.postDelayed(hideRunnable, 8000)
+                resetHideTimer()
                 return@post
             }
             clearAll()
             try {
                 val arr = JSONArray(jsonStr)
+                val placedRects = mutableListOf<IntArray>()
+
                 for (i in 0 until arr.length()) {
                     val obj = arr.getJSONObject(i)
                     val text = obj.optString("t", "").trim()
                     if (text.isEmpty()) continue
-                    val nx = obj.optDouble("x", 0.5).coerceIn(0.02, 0.85)
-                    val ny = obj.optDouble("y", 0.5).coerceIn(0.05, 0.94)
+                    val nx = obj.optDouble("x", 0.5).coerceIn(0.02, 0.84)
+                    val ny = obj.optDouble("y", 0.5).coerceIn(0.04, 0.92)
 
-                    val label = createLabelView(16f).apply {
-                        this.text = text
-                        maxWidth = (screenW * 0.32).toInt()
-                        maxLines = 2
-                        ellipsize = TextUtils.TruncateAt.END
+                    val px = (nx * screenW).toInt()
+                    var py = ((ny - 0.036).coerceAtLeast(0.01) * screenH).toInt()
+
+                    // منع تداخل الملصقات عمودياً إذا كانت متقاربة جداً
+                    for (r in placedRects) {
+                        if (kotlin.math.abs(px - r[0]) < (screenW * 0.16).toInt() &&
+                            kotlin.math.abs(py - r[1]) < 42) {
+                            py = (r[1] - 44).coerceAtLeast(10)
+                        }
                     }
+                    placedRects.add(intArrayOf(px, py))
 
+                    val label = createMenuPill(text).apply { alpha = 0f }
                     val lp = WindowManager.LayoutParams(
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.WRAP_CONTENT,
@@ -210,15 +251,16 @@ class OverlayService : Service() {
                         PixelFormat.TRANSLUCENT
                     ).apply {
                         gravity = Gravity.TOP or Gravity.LEFT
-                        x = (nx * screenW).toInt()
-                        y = ((ny - 0.042).coerceAtLeast(0.01) * screenH).toInt()
+                        x = px
+                        y = py
                     }
                     windowManager.addView(label, lp)
+                    label.animate().alpha(1f).setDuration(140).start()
                     itemViews.add(label)
                 }
                 if (itemViews.isNotEmpty()) {
                     lastItemsJson = jsonStr
-                    mainHandler.postDelayed(hideRunnable, 8000)
+                    resetHideTimer()
                 }
             } catch (_: Exception) {
             }
@@ -241,6 +283,8 @@ class OverlayService : Service() {
                             }
 
                             var bodyText = "OK"
+                            var contentType = "text/plain; charset=utf-8"
+
                             if (requestLine.startsWith("GET ")) {
                                 val path = requestLine.split(" ").getOrNull(1) ?: ""
                                 val query = path.substringAfter("?", "")
@@ -251,29 +295,47 @@ class OverlayService : Service() {
                                     } else null
                                 }.toMap()
 
-                                val setMode = paramsMap["setmode"]
-                                val getMode = paramsMap["getmode"]
-                                val itemsJson = paramsMap["items"]
-                                val textParam = paramsMap["text"]
-
                                 when {
-                                    setMode != null -> {
-                                        currentMode = if (setMode == "subtitles") "subtitles" else "menus"
+                                    paramsMap["setconfig"] != null -> {
+                                        paramsMap["mode"]?.let { currentMode = if (it == "subtitles") "subtitles" else "menus" }
+                                        paramsMap["key"]?.let { savedKey = it }
+                                        paramsMap["model"]?.let { if (it.isNotBlank()) savedModel = it }
+                                        paramsMap["game"]?.let { if (it.isNotBlank()) savedGame = it }
+                                        bodyText = "SAVED"
+                                    }
+                                    paramsMap["getconfig"] != null -> {
+                                        val cfg = JSONObject().apply {
+                                            put("mode", currentMode)
+                                            put("key", savedKey)
+                                            put("model", savedModel)
+                                            put("game", savedGame)
+                                        }
+                                        bodyText = cfg.toString()
+                                        contentType = "application/json; charset=utf-8"
+                                    }
+                                    paramsMap["setmode"] != null -> {
+                                        currentMode = if (paramsMap["setmode"] == "subtitles") "subtitles" else "menus"
                                         bodyText = currentMode
                                     }
-                                    getMode != null -> {
+                                    paramsMap["getmode"] != null -> {
                                         bodyText = currentMode
                                     }
-                                    !itemsJson.isNullOrBlank() -> {
-                                        showPositionedItems(itemsJson)
+                                    paramsMap["keepalive"] != null -> {
+                                        mainHandler.post { resetHideTimer() }
                                     }
-                                    textParam != null -> {
-                                        showSingleSubtitle(textParam)
+                                    paramsMap["clear"] != null -> {
+                                        mainHandler.post { clearAll() }
+                                    }
+                                    !paramsMap["items"].isNullOrBlank() -> {
+                                        showPositionedItems(paramsMap["items"]!!)
+                                    }
+                                    paramsMap["text"] != null -> {
+                                        showSingleSubtitle(paramsMap["text"]!!)
                                     }
                                 }
                             }
 
-                            val response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\n\r\n$bodyText"
+                            val response = "HTTP/1.1 200 OK\r\nContent-Type: $contentType\r\nAccess-Control-Allow-Origin: *\r\n\r\n$bodyText"
                             sock.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
                             sock.getOutputStream().flush()
                         }
