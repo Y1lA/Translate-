@@ -32,6 +32,8 @@ class OverlayService : Service() {
     companion object {
         @Volatile
         var isRunning = false
+        @Volatile
+        var currentMode = "menus"
         private var instance: OverlayService? = null
 
         fun updateSubtitle(text: String) {
@@ -141,7 +143,7 @@ class OverlayService : Service() {
             gravity = Gravity.CENTER
             textDirection = View.TEXT_DIRECTION_RTL
             background = bg
-            setPadding(24, 10, 24, 10)
+            setPadding(22, 8, 22, 8)
         }
     }
 
@@ -175,12 +177,12 @@ class OverlayService : Service() {
                     val obj = arr.getJSONObject(i)
                     val text = obj.optString("t", "").trim()
                     if (text.isEmpty()) continue
-                    val nx = obj.optDouble("x", 0.5).coerceIn(0.02, 0.88)
+                    val nx = obj.optDouble("x", 0.5).coerceIn(0.02, 0.85)
                     val ny = obj.optDouble("y", 0.5).coerceIn(0.05, 0.94)
 
                     val label = createLabelView(16f).apply {
                         this.text = text
-                        maxWidth = (screenW * 0.35).toInt()
+                        maxWidth = (screenW * 0.32).toInt()
                         maxLines = 2
                         ellipsize = TextUtils.TruncateAt.END
                     }
@@ -190,7 +192,7 @@ class OverlayService : Service() {
                     ).apply {
                         gravity = Gravity.TOP or Gravity.START
                         leftMargin = (nx * screenW).toInt()
-                        topMargin = ((ny - 0.045).coerceAtLeast(0.01) * screenH).toInt()
+                        topMargin = ((ny - 0.042).coerceAtLeast(0.01) * screenH).toInt()
                     }
                     rootContainer.addView(label, lp)
                 }
@@ -217,6 +219,7 @@ class OverlayService : Service() {
                                 if (line.isEmpty()) break
                             }
 
+                            var bodyText = "OK"
                             if (requestLine.startsWith("GET ")) {
                                 val path = requestLine.split(" ").getOrNull(1) ?: ""
                                 val query = path.substringAfter("?", "")
@@ -227,16 +230,29 @@ class OverlayService : Service() {
                                     } else null
                                 }.toMap()
 
+                                val setMode = paramsMap["setmode"]
+                                val getMode = paramsMap["getmode"]
                                 val itemsJson = paramsMap["items"]
                                 val textParam = paramsMap["text"]
-                                if (!itemsJson.isNullOrBlank()) {
-                                    showPositionedItems(itemsJson)
-                                } else if (textParam != null) {
-                                    showSingleSubtitle(textParam)
+
+                                when {
+                                    setMode != null -> {
+                                        currentMode = if (setMode == "subtitles") "subtitles" else "menus"
+                                        bodyText = currentMode
+                                    }
+                                    getMode != null -> {
+                                        bodyText = currentMode
+                                    }
+                                    !itemsJson.isNullOrBlank() -> {
+                                        showPositionedItems(itemsJson)
+                                    }
+                                    textParam != null -> {
+                                        showSingleSubtitle(textParam)
+                                    }
                                 }
                             }
 
-                            val response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\n\r\nOK"
+                            val response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\n\r\n$bodyText"
                             sock.getOutputStream().write(response.toByteArray(Charsets.UTF_8))
                             sock.getOutputStream().flush()
                         }
